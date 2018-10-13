@@ -39,7 +39,8 @@ def tf_loss_batch(model, xb, yb, loss_fn=None, opt=None, cb_handler=None, metric
     
     if not loss_fn:
         out = forward()
-        return out,yb[0]
+        out_d = out[0] if isinstance(out, tuple) else out
+        return out_d,yb[0]
         
     loss, mets = None, None
     if opt is not None:
