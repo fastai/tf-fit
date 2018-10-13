@@ -5,7 +5,7 @@ tf.enable_eager_execution()
 tfe = tf.contrib.eager
 tf.keras.backend.set_image_data_format('channels_first')
 
-__all__ = []
+__all__ = ['tf_flatten_model', 'tf_bn_types', 'tf_loss_batch', 'tf_get_preds', 'tf_validate', 'tf_train_epoch', 'tf_fit, TfLearner', 'TfOptimWrapper', 'TfRegularizer']
 
 tf_flatten_model=lambda m: sum(map(tf_flatten_model,m.layers),[]) if hasattr(m, "layers") else [m]
 
