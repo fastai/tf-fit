@@ -2,20 +2,20 @@ import tensorflow as tf
 from fastai import *
 
 tf.enable_eager_execution()
-tfe = tf.contrib.eager
 tf.keras.backend.set_image_data_format('channels_first')
 
-__all__ = []
+__all__ = ['TfLearner', 'tf_fit', 'tf_loss_batch', 'tf_train_epoch', 'tf_validate', 'tf_get_preds', 'TfOptimWrapper', 'TfRegularizer']
 
 tf_flatten_model=lambda m: sum(map(tf_flatten_model,m.layers),[]) if hasattr(m, "layers") else [m]
 
 tf_bn_types = (tf.keras.layers.BatchNormalization,)
 
-tf.Tensor.detach = lambda x: x.numpy()
+tf.Tensor.detach = lambda x: x
+tf.Tensor.item = lambda x: x.numpy()
 
 
-def tf_loss_batch(model, xb, yb, loss_fn=None, opt=None, cb_handler=None, metrics=None):
-    "Calculate loss and metrics for a batch, call out to callbacks as necessary."
+def tf_loss_batch(model, xb, yb, loss_func=None, opt=None, cb_handler=None):
+    "Calculate loss for a batch, call out to callbacks as necessary."
     if cb_handler is None: cb_handler = CallbackHandler([])
     if not is_listy(xb): xb = [xb]
     if not is_listy(yb): yb = [yb]
@@ -29,22 +29,19 @@ def tf_loss_batch(model, xb, yb, loss_fn=None, opt=None, cb_handler=None, metric
         out = model(*xb)
         out = cb_handler.on_loss_begin(out)
         return out
-    def forward_calc_loss_mets():
+    def forward_calc_loss():
         out = forward()
-        loss = loss_fn(*yb, out) #reversed params compared to pytorch
-        mets = [f(*yb, out).numpy() for f in metrics] if metrics is not None else [] #note metrics params order
+        loss = loss_func(*yb, out) #reversed params compared to pytorch
         loss = cb_handler.on_backward_begin(loss)
-        return loss, mets
+        return loss
     
     
-    if not loss_fn:
-        out = forward()
-        return out,yb[0]
+    if not loss_func: return forward(), yb[0]
         
-    loss, mets = None, None
+    loss = None
     if opt is not None:
         with tf.GradientTape() as tape:
-            loss, mets = forward_calc_loss_mets()
+            loss = forward_calc_loss()
             
         
         grads = tape.gradient(loss, model.weights)
@@ -53,29 +50,33 @@ def tf_loss_batch(model, xb, yb, loss_fn=None, opt=None, cb_handler=None, metric
         cb_handler.on_step_end()
         
     else:
-        loss, mets = forward_calc_loss_mets()
+        loss = forward_calc_loss()
         
+    return loss.numpy()
     
-    return ((loss.numpy(),) + tuple(mets))
-    
-def tf_get_preds(model, dl, pbar=None, cb_handler=None):
+def tf_get_preds(model, dl, pbar=None, cb_handler=None, activ=None, loss_func=None, n_batch=None):
     "Predict the output of the elements in the dataloader."
-    return [np.concatenate(o) for o in zip(*tf_validate(model, dl, pbar=pbar, cb_handler=cb_handler, average=False))]
+    res = [np.concatenate(o) for o in
+           zip(*validate(model, dl, cb_handler=cb_handler, pbar=pbar, average=False, n_batch=n_batch))]
+    if loss_func is not None: res.append(calc_loss(res[0], res[1], loss_func))
+    if activ is not None: res[0] = activ(res[0])
+    return res
     
     
-def tf_validate(model, dl, loss_fn=None, metrics=None, cb_handler=None, pbar=None, average=True):
+def tf_validate(model, dl, loss_func=None, cb_handler=None, pbar=None, average=True, n_batch=None):
     "Calculate loss and metrics for the validation set."
     
-    val_metrics,nums = [],[]
+    val_losses,nums = [],[]
     for xb,yb in progress_bar(dl, parent=pbar, leave=(pbar is not None)):
         if cb_handler: xb, yb = cb_handler.on_batch_begin(xb, yb, train=False)
-        val_metrics.append(tf_loss_batch(model, xb, yb, loss_fn, cb_handler=cb_handler, metrics=metrics))
+        val_losses.append(tf_loss_batch(model, xb, yb, loss_func, cb_handler=cb_handler))
         if not is_listy(yb): yb = [yb]
         nums.append(yb[0].shape[0])
-        if cb_handler and cb_handler.on_batch_end(val_metrics[0]): break
+        if cb_handler and cb_handler.on_batch_end(val_losses[-1]): break
+        if n_batch and (len(nums)>=n_batch): break
     nums = np.array(nums, dtype=np.float32)
-    if average: return [(np.stack(val) * nums).sum() / nums.sum() for val in zip(*val_metrics)]
-    else: return val_metrics
+    if average: return (np.stack(val_losses) * nums).sum() / nums.sum()
+    else:       return val_losses
 
 
 def tf_train_epoch(model, dl, opt, loss_func):
@@ -89,14 +90,14 @@ def tf_train_epoch(model, dl, opt, loss_func):
 
         with tf.GradientTape() as tape:
             out = model(*xb)
-            loss = loss_fn(*yb, out) #reversed params compared to pytorch
+            loss = loss_func(*yb, out) #reversed params compared to pytorch
 
 
         grads = tape.gradient(loss, model.weights)
         opt.apply_gradients(zip(grads, model.weights))
 
-def tf_fit(epochs, model, loss_fn, opt, data, callbacks, metrics):
-    cb_handler = CallbackHandler(callbacks)
+def tf_fit(epochs, model, loss_func, opt, data, callbacks, metrics):
+    cb_handler = CallbackHandler(callbacks, metrics)
     pbar = master_bar(range(epochs))
     cb_handler.on_train_begin(epochs, pbar=pbar, metrics=metrics)
 
@@ -107,15 +108,15 @@ def tf_fit(epochs, model, loss_fn, opt, data, callbacks, metrics):
 
             for xb,yb in progress_bar(data.train_dl, parent=pbar):
                 xb, yb = cb_handler.on_batch_begin(xb, yb)
-                loss = tf_loss_batch(model, xb, yb, loss_fn, opt, cb_handler)
+                loss = tf_loss_batch(model, xb, yb, loss_func, opt, cb_handler)
                 if cb_handler.on_batch_end(loss): break
 
             if hasattr(data,'valid_dl') and data.valid_dl is not None:
-                val_metrics = tf_validate(model, data.valid_dl, loss_fn=loss_fn,
-                                       cb_handler=cb_handler, metrics=metrics,pbar=pbar)
+                val_loss = tf_validate(model, data.valid_dl, loss_func=loss_func,
+                                       cb_handler=cb_handler, pbar=pbar)
 
-            else: val_metrics=None
-            if cb_handler.on_epoch_end(val_metrics): break
+            else: val_loss=None
+            if cb_handler.on_epoch_end(val_loss): break
     except Exception as e:
         exception = e
         raise e
@@ -127,11 +128,11 @@ def tf_fit(epochs, model, loss_fn, opt, data, callbacks, metrics):
     
 @dataclass
 class TfLearner():
-    "Train `model` using `data` to minimize `loss_fn` with optimizer `opt_fn`."
+    "Train `model` using `data` to minimize `loss_func` with optimizer `opt_func`."
     data:DataBunch
     model:tf.keras.Model
-    opt_fn:Callable
-    loss_fn:Callable
+    opt_func:Callable
+    loss_func:Callable
     metrics:Collection[Callable]=None
     true_wd:bool=True
     bn_wd:bool=True
@@ -171,12 +172,12 @@ class TfLearner():
         if wd is None: wd = self.wd
         self.create_opt(lr, wd)
         callbacks = [cb(self) for cb in self.callback_fns] + listify(callbacks)      
-        tf_fit(epochs, self.model, self.loss_fn, opt=self.opt, data=self.data, metrics=self.metrics,
+        tf_fit(epochs, self.model, self.loss_func, opt=self.opt, data=self.data, metrics=self.metrics,
             callbacks=self.callbacks+callbacks)
 
     def create_opt(self, lr:Floats, wd:Floats=0.)->None:
         "Create optimizer with `lr` learning rate and `wd` weight decay."
-        self.opt = TfOptimWrapper.create(self.opt_fn, lr, wd, self.layer_groups)
+        self.opt = TfOptimWrapper.create(self.opt_func, lr, wd, self.layer_groups)
 
 
     def freeze_to(self, n:int)->None:
@@ -209,8 +210,29 @@ class TfLearner():
         root = tf.train.Checkpoint(model=self.model)
         root.restore(str(self.path/self.model_dir/f'{name}-1'))
     
-    def get_preds(self, is_test=False):
-        return tf_get_preds(self.model, self.data.holdout(is_test), cb_handler=CallbackHandler(self.callbacks))  
+    def get_preds(self, is_test=False, with_loss=False, n_batch=None):
+        "Return predictions and targets on the valid or test set, depending on `is_test`."
+        lf = self.loss_func if with_loss else None
+        return tf_get_preds(self.model, self.data.holdout(is_test), cb_handler=CallbackHandler(self.callbacks),
+                         activ=self.loss_func, loss_func=lf, n_batch=n_batch)
+    def pred_batch(self, is_test=False):
+        "Return output of the model on one batch from valid or test set, depending on `is_test`."
+        dl = self.data.holdout(is_test)
+        nw = dl.num_workers
+        dl.num_workers = 0
+        preds,_ = self.tf_get_preds(is_test, with_loss=False, n_batch=1)
+        dl.num_workers = nw
+        return preds[0]
+
+    def validate(self, dl=None, callbacks=None, metrics=None):
+        "Validate on `dl` with potential `callbacks` and `metrics`."
+        dl = ifnone(dl, self.data.valid_dl)
+        metrics = ifnone(metrics, self.metrics)
+        cb_handler = CallbackHandler(self.callbacks + ifnone(callbacks, []), metrics)
+        cb_handler.on_epoch_begin()
+        val_metrics = tf_validate(self.model, dl, self.loss_func, cb_handler)
+        cb_handler.on_epoch_end(val_metrics)
+        return cb_handler.state_dict['last_metrics']
 
 
 
@@ -223,14 +245,14 @@ TfLearner.lr_find = lr_find
 
 
 class TfOptimWrapper():
-    def __init__(self, opt_fn, layer_groups):
+    def __init__(self, opt_func, layer_groups):
         self.layer_groups = layer_groups
-        self._lr = [tfe.Variable(0.0) for o in layer_groups]
-        self._mom = tfe.Variable(0.0)
+        self._lr = [tf.Variable(0.0) for o in layer_groups]
+        self._mom = tf.Variable(0.0)
         self._wd = 0.0
         
         
-        opt_params = inspect.signature(opt_fn).parameters
+        opt_params = inspect.signature(opt_func).parameters
         params = {}
         if opt_params.get("momentum"):
             self.mom = opt_params.get("momentum").default
@@ -240,12 +262,12 @@ class TfOptimWrapper():
             params["beta1"] = self._mom
         
         
-        self.opt = [opt_fn(learning_rate=o, **params) for o in self._lr]
+        self.opt = [opt_func(learning_rate=o, **params) for o in self._lr]
         
         
     @classmethod
-    def create(cls, opt_fn, lr, wd, layer_groups, **kwargs):
-        opt = cls(opt_fn, layer_groups,  **kwargs)
+    def create(cls, opt_func, lr, wd, layer_groups, **kwargs):
+        opt = cls(opt_func, layer_groups,  **kwargs)
         
         
         opt.lr = lr
