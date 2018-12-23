@@ -7,13 +7,13 @@ An environment with fastai and Tensorflow installed.
 ## Features
 This project is an extension of fastai to allow training of Tensorflow models with a similar interface of fastai. It uses fastai `DataBunch` objects so the interface is exactly the same for loading data. For training, the `TfLearner` has many of the same features as the fastai `Learner`. Here is a list of the currently supported features.
 * Training Tensorflow models with constant learning rate and weight decay
-* Training using the 1cycle policy
+* Training using the [1cycle policy](https://docs.fast.ai/train.html#fit_one_cycle)
 * Fit with callbacks with access to hyper parameter updates
 * Discriminative learning rates
 * Freezing layers from having parameters trained
-* (True weight decay option)[https://arxiv.org/abs/1711.05101]
+* [True weight decay option](https://arxiv.org/abs/1711.05101)
 * L2 regularization (true_wd=False)
-* (Removing weight decay from batchnorm layers option (bn_wd=False))[https://arxiv.org/abs/1706.02677]
+* [Removing weight decay from batchnorm layers option (bn_wd=False)](https://arxiv.org/abs/1706.02677)
 * Momentum
 * Option to train batchnorm layers even if the layer is frozen (train_bn=True)
 * Model saving and loading
@@ -98,7 +98,7 @@ Train the model for 3 epochs with a learning rate of 3e-3 and weight decay of 0.
 learn.fit(3, lr=3e-3, wd=0.4)
 ```
 
-Fit the model using [one cycle policy](https://docs.fast.ai/train.html#fit_one_cycle) with a cycle length of 10 using a discriminative learning rate.
+Fit the model using 1cycle policy with a cycle length of 10 using a discriminative learning rate.
 ```python
 learn.fit_one_cycle(10, max_lr=slice(6e-3, 3e-3))
 ```
