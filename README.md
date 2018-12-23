@@ -22,6 +22,7 @@ This project is an extension of fastai to allow training of Tensorflow models wi
 ## To do
 This project is a work in progress so there may be missing features or obscure bugs.
 * Get predictions function
+* Tensorflow train/eval functionality for dropout and batchnorm in eager mode
 * Learning rate finder
 * Pip and conda packages
 
