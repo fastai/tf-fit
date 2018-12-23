@@ -1,27 +1,32 @@
 import tensorflow as tf
-from fastai import *
+from fastai.basics import *
+
+defaults.device = torch.device('cpu')
 
 tf.enable_eager_execution()
 tf.keras.backend.set_image_data_format('channels_first')
 
-__all__ = ['TfLearner', 'tf_fit', 'tf_loss_batch', 'tf_train_epoch', 'tf_validate', 'tf_get_preds', 'TfOptimWrapper', 'TfRegularizer']
+__all__ = ['TfLearner', 'tf_fit', 'tf_loss_batch', 'tf_train_epoch', 'tf_validate', 'tf_get_preds', 'TfOptimWrapper', 'TfRegularizer', 'tf']
 
 tf_flatten_model=lambda m: sum(map(tf_flatten_model,m.layers),[]) if hasattr(m, "layers") else [m]
 
 tf_bn_types = (tf.keras.layers.BatchNormalization,)
 
 tf.Tensor.detach = lambda x: x
+tf.Tensor.cpu = lambda x: x.numpy()
 tf.Tensor.item = lambda x: x.numpy()
+tf.Tensor.size = lambda x, axis: tf.shape(x)[axis].numpy()
 
+def _pytorch_to_tf(var):
+    if not is_listy(var): return tf.constant(var.cpu().numpy())
+    else: return [tf.constant(v.cpu().numpy()) for v in var]
 
 def tf_loss_batch(model, xb, yb, loss_func=None, opt=None, cb_handler=None):
     "Calculate loss for a batch, call out to callbacks as necessary."
-    if cb_handler is None: cb_handler = CallbackHandler([])
+    cb_handler = ifnone(cb_handler, CallbackHandler())
     if not is_listy(xb): xb = [xb]
     if not is_listy(yb): yb = [yb]
     
-    xb = [tf.constant(v.cpu().numpy()) for v in xb]
-    yb = [tf.constant(v.cpu().numpy()) for v in yb]
     
     
     
@@ -55,23 +60,24 @@ def tf_loss_batch(model, xb, yb, loss_func=None, opt=None, cb_handler=None):
     return loss.numpy()
     
 def tf_get_preds(model, dl, pbar=None, cb_handler=None, activ=None, loss_func=None, n_batch=None):
-    "Predict the output of the elements in the dataloader."
+    "Tuple of predictions and targets, and optional losses (if `loss_func`) using `dl`, max batches `n_batch`."
     res = [np.concatenate(o) for o in
-           zip(*validate(model, dl, cb_handler=cb_handler, pbar=pbar, average=False, n_batch=n_batch))]
+           zip(*tf_validate(model, dl, cb_handler=cb_handler, pbar=pbar, average=False, n_batch=n_batch))]
     if loss_func is not None: res.append(calc_loss(res[0], res[1], loss_func))
     if activ is not None: res[0] = activ(res[0])
     return res
     
     
 def tf_validate(model, dl, loss_func=None, cb_handler=None, pbar=None, average=True, n_batch=None):
-    "Calculate loss and metrics for the validation set."
+    "Calculate `loss_func` of `model` on `dl` in evaluation mode."
     
     val_losses,nums = [],[]
     for xb,yb in progress_bar(dl, parent=pbar, leave=(pbar is not None)):
+        xb, yb = _pytorch_to_tf(xb), _pytorch_to_tf(yb)
         if cb_handler: xb, yb = cb_handler.on_batch_begin(xb, yb, train=False)
         val_losses.append(tf_loss_batch(model, xb, yb, loss_func, cb_handler=cb_handler))
         if not is_listy(yb): yb = [yb]
-        nums.append(yb[0].shape[0])
+        nums.append(yb[0].size(0))
         if cb_handler and cb_handler.on_batch_end(val_losses[-1]): break
         if n_batch and (len(nums)>=n_batch): break
     nums = np.array(nums, dtype=np.float32)
@@ -82,19 +88,18 @@ def tf_validate(model, dl, loss_func=None, cb_handler=None, pbar=None, average=T
 def tf_train_epoch(model, dl, opt, loss_func):
     "Simple training of `model` for 1 epoch of `dl` using optim `opt` and loss function `loss_func`."
     for xb,yb in dl:
+        xb, yb = _pytorch_to_tf(xb), _pytorch_to_tf(yb)
         if not is_listy(xb): xb = [xb]
         if not is_listy(yb): yb = [yb]
 
-        xb = [tf.constant(v.cpu().numpy()) for v in xb]
-        yb = [tf.constant(v.cpu().numpy()) for v in yb]
 
         with tf.GradientTape() as tape:
             out = model(*xb)
             loss = loss_func(*yb, out) #reversed params compared to pytorch
 
 
-        grads = tape.gradient(loss, model.weights)
-        opt.apply_gradients(zip(grads, model.weights))
+        grads = tape.gradient(loss, model.trainable_weights)
+        opt.apply_gradients(zip(grads, model.trainable_weights))
 
 def tf_fit(epochs, model, loss_func, opt, data, callbacks, metrics):
     cb_handler = CallbackHandler(callbacks, metrics)
@@ -107,13 +112,13 @@ def tf_fit(epochs, model, loss_func, opt, data, callbacks, metrics):
             cb_handler.on_epoch_begin()
 
             for xb,yb in progress_bar(data.train_dl, parent=pbar):
+                xb, yb = _pytorch_to_tf(xb), _pytorch_to_tf(yb)
                 xb, yb = cb_handler.on_batch_begin(xb, yb)
                 loss = tf_loss_batch(model, xb, yb, loss_func, opt, cb_handler)
                 if cb_handler.on_batch_end(loss): break
 
-            if hasattr(data,'valid_dl') and data.valid_dl is not None:
-                val_loss = tf_validate(model, data.valid_dl, loss_func=loss_func,
-                                       cb_handler=cb_handler, pbar=pbar)
+            if not data.empty_val:
+                val_loss = tf_validate(model, data.valid_dl, loss_func=loss_func, cb_handler=cb_handler, pbar=pbar)
 
             else: val_loss=None
             if cb_handler.on_epoch_end(val_loss): break
@@ -136,7 +141,7 @@ class TfLearner():
     metrics:Collection[Callable]=None
     true_wd:bool=True
     bn_wd:bool=True
-    wd:float=default_wd
+    wd:float=defaults.wd
     train_bn:bool=True
     path:str=None
     model_dir:str='models'
@@ -154,6 +159,7 @@ class TfLearner():
         
         #build the model by running 1 batch
         xb, yb = next(iter(self.data.train_dl))
+        xb, yb = _pytorch_to_tf(xb), _pytorch_to_tf(yb)
         tf_loss_batch(self.model, xb, yb)
 
     def init(self, init): raise NotImplementedError
@@ -162,10 +168,10 @@ class TfLearner():
         "Build differential learning rates."
         if not isinstance(lr,slice): return lr
         if lr.start: res = even_mults(lr.start, lr.stop, len(self.layer_groups))
-        else: res = [lr.stop/3]*(len(self.layer_groups)-1) + [lr.stop]
+        else: res = [lr.stop/10]*(len(self.layer_groups)-1) + [lr.stop]
         return np.array(res)
 
-    def fit(self, epochs:int, lr:Union[Floats,slice]=default_lr,
+    def fit(self, epochs:int, lr:Union[Floats,slice]=defaults.lr,
             wd:Floats=None, callbacks:Collection[Callback]=None)->None:
         "Fit the model on this learner with `lr` learning rate, `wd` weight decay for `epochs` with `callbacks`."
         lr = self.lr_range(lr)
@@ -178,7 +184,6 @@ class TfLearner():
     def create_opt(self, lr:Floats, wd:Floats=0.)->None:
         "Create optimizer with `lr` learning rate and `wd` weight decay."
         self.opt = TfOptimWrapper.create(self.opt_func, lr, wd, self.layer_groups)
-
 
     def freeze_to(self, n:int)->None:
         "Freeze layers up to layer `n`."
@@ -204,36 +209,27 @@ class TfLearner():
         root = tf.train.Checkpoint(model=self.model)
         root.save(file_prefix=self.path/self.model_dir/f'{name}')
 
-
+    def dl(self, ds_type:DatasetType=DatasetType.Valid):
+        "Return DataLoader for DatasetType `ds_type`."
+        return self.data.dl(ds_type)
+        
     def load(self, name:PathOrStr):
         "Load model `name` from `self.model_dir`."
         root = tf.train.Checkpoint(model=self.model)
         root.restore(str(self.path/self.model_dir/f'{name}-1'))
     
-    def get_preds(self, is_test=False, with_loss=False, n_batch=None):
-        "Return predictions and targets on the valid or test set, depending on `is_test`."
-        lf = self.loss_func if with_loss else None
-        return tf_get_preds(self.model, self.data.holdout(is_test), cb_handler=CallbackHandler(self.callbacks),
-                         activ=self.loss_func, loss_func=lf, n_batch=n_batch)
-    def pred_batch(self, is_test=False):
-        "Return output of the model on one batch from valid or test set, depending on `is_test`."
-        dl = self.data.holdout(is_test)
-        nw = dl.num_workers
-        dl.num_workers = 0
-        preds,_ = self.tf_get_preds(is_test, with_loss=False, n_batch=1)
-        dl.num_workers = nw
-        return preds[0]
-
+    def get_preds(self, ds_type:DatasetType=DatasetType.Valid, with_loss:bool=False, n_batch:Optional[int]=None, pbar:Optional[PBar]=None) -> List[Tensor]:
+        raise NotImplementedError
+    def pred_batch(self, ds_type:DatasetType=DatasetType.Valid, batch:Tuple=None, reconstruct:bool=False) -> List[Tensor]:
+        raise NotImplementedError
+    def backward(self, item):
+        raise NotImplementedError
+    def predict(self, item:ItemBase, **kwargs):
+        raise NotImplementedError
     def validate(self, dl=None, callbacks=None, metrics=None):
-        "Validate on `dl` with potential `callbacks` and `metrics`."
-        dl = ifnone(dl, self.data.valid_dl)
-        metrics = ifnone(metrics, self.metrics)
-        cb_handler = CallbackHandler(self.callbacks + ifnone(callbacks, []), metrics)
-        cb_handler.on_epoch_begin()
-        val_metrics = tf_validate(self.model, dl, self.loss_func, cb_handler)
-        cb_handler.on_epoch_end(val_metrics)
-        return cb_handler.state_dict['last_metrics']
-
+        raise NotImplementedError
+    def show_results(self, ds_type=DatasetType.Valid, rows:int=5, **kwargs):
+        raise NotImplementedError
 
 
 TfLearner.fit_one_cycle = fit_one_cycle
@@ -274,10 +270,11 @@ class TfOptimWrapper():
         opt.wd = wd
         return opt
     
-        
+    #requires grads and vars of only trainable layers 
     def apply_gradients(self, grads_and_vars):
-        for gv, opt, l in zip(grads_and_vars, self.opt, self.layer_groups):
-            if l.trainable: opt.apply_gradients([gv])
+        for l, opt in zip(self.layer_groups, self.opt):
+            for i in range(len(l.trainable_weights)):
+                opt.apply_gradients([next(grads_and_vars)])
         
     
     @property
