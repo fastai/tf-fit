@@ -35,6 +35,7 @@ from fastai.vision import *
 from fastai_tf_fit import *
 
 path = untar_data(URLs.CIFAR)
+ds_tfms = ([*rand_pad(4, 32), flip_lr(p=0.5)], [])
 data = ImageDataBunch.from_folder(path, valid='test', ds_tfms=ds_tfms, bs=512).normalize(cifar_stats)
 
 opt_fn = tf.train.AdamOptimizer
