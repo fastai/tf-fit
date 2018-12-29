@@ -16,7 +16,7 @@ setuptools.setup(
     keywords = 'fastai, deep learning, machine learning, pytorch, keras, tensorflow',
     url="https://github.com/fastai/tf-fit",
     packages=setuptools.find_packages(),
-    install_requires=['tensorflow-gpu'],
+    install_requires=['fastai==1.0.39', 'tensorflow'],
     python_requires  = '==3.6.*',
     classifiers=[
         "Development Status :: 3 - Alpha",
