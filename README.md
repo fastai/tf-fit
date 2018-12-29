@@ -1,13 +1,16 @@
 # fastai-tf-fit
 Fit your Tensorflow model using fastai and PyTorch
 
-## Requirements
-An environment with fastai and Tensorflow installed.
+## Installation
+```bash
+pip install git+https://github.com/fastai/tf-fit.git
+```
 
 ## Features
 This project is an extension of fastai to allow training of Tensorflow models with a similar interface of fastai. It uses fastai `DataBunch` objects so the interface is exactly the same for loading data. For training, the `TfLearner` has many of the same features as the fastai `Learner`. Here is a list of the currently supported features.
 * Training Tensorflow models with constant learning rate and weight decay
 * Training using the [1cycle policy](https://docs.fast.ai/train.html#fit_one_cycle)
+* Learning rate finder
 * Fit with callbacks with access to hyper parameter updates
 * Discriminative learning rates
 * Freezing layers from having parameters trained
@@ -23,7 +26,6 @@ This project is an extension of fastai to allow training of Tensorflow models wi
 This project is a work in progress so there may be missing features or obscure bugs.
 * Get predictions function
 * Tensorflow train/eval functionality for dropout and batchnorm in eager mode
-* Learning rate finder
 * Pip and conda packages
 
 ## Examples
@@ -73,26 +75,32 @@ model = Simple_CNN()
 
 ### Using Keras functional API
 ```python
-inputs = Input(shape=(3,32,32))
+inputs = tf.keras.layers.Input(shape=(3,32,32))
+x = tf.keras.layers.Conv2D(16, kernel_size=3, strides=(2,2), padding='same')(inputs)
+x = tf.keras.layers.BatchNormalization(axis=1)(x)
+x = tf.keras.layers.Activation("relu")(x)
 x = tf.keras.layers.Conv2D(16, kernel_size=3, strides=(2,2), padding='same')(x)
 x = tf.keras.layers.BatchNormalization(axis=1)(x)
-x = tf.nn.relu(x)
-x = tf.keras.layers.Conv2D(16, kernel_size=3, strides=(2,2), padding='same')(x)
-x = tf.keras.layers.BatchNormalization(axis=1)(x)
-x = tf.nn.relu(x)
+x = tf.keras.layers.Activation("relu")(x)
 x = tf.keras.layers.Conv2D(10, kernel_size=3, strides=(2,2), padding='same')(x)
 x = tf.keras.layers.BatchNormalization(axis=1)(x)
-x = tf.nn.relu(x)
-x = tf.nn.pool(x, (4,4), 'AVG', 'VALID', data_format="NCHW")
-x = tf.reshape(x, (-1, 10))
+x = tf.keras.layers.Activation("relu")(x)
+x = tf.keras.layers.AveragePooling2D(pool_size=(4, 4), padding='same')(x)
+x = tf.keras.layers.Reshape((10,))(x)
 predictions = tf.keras.layers.Dense(10, activation='softmax')(x)
-model = Model(inputs=inputs, outputs=predictions)
+model = tf.keras.models.Model(inputs=inputs, outputs=predictions)
 ```
 
 ### Training
 Create TfLearner object
 ```python
 learn = TfLearner(data, model, opt_fn, loss_fn, metrics=metrics, true_wd=True, bn_wd=True, wd=defaults.wd, train_bn=True)
+```
+
+Learning rate finder.
+```python
+learn.lr_find()
+learn.recorder.plot()
 ```
 
 Train the model for 3 epochs with a learning rate of 3e-3 and weight decay of 0.4.
