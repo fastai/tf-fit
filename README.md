@@ -20,7 +20,7 @@ This project is an extension of fastai to allow training of Tensorflow models wi
 * Momentum
 * Option to train batchnorm layers even if the layer is frozen (train_bn=True)
 * Model saving and loading
-* Default image data format is channels * hieght * width
+* Default image data format is channels * height * width
 
 ## To do
 This project is a work in progress so there may be missing features or obscure bugs.
